@@ -193,15 +193,10 @@ Upload your github link with following files:
 2. `query_system_multiagent.py`
 3. `agents/` (your implementation modules)
 4. `auto_test_a5.py`
-5. `test_data_a5.json`
-6. `routing_trace_example.json`
-   - At least 3 traces: normal success / security rejection / repair branch
-7. `requirements.txt`
-8. `build_kg.py`
+5. `requirements.txt`
+6. `build_kg.py`
    - A4-compatible KG builder used for A4→A5 continuity validation
 
-### Recommended (optional)
-9. `schema/` (KG schema notes/diagram)
 
 ---
 
