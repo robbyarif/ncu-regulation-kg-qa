@@ -1,0 +1,28 @@
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Model Cache
+hf_model_cache
+
+# Configuration & Secrets
+.env
+
+# Database
+*.db
+
+# Logs & Results
+*.log
+auto_test_a5_results.json
+
+# OS files
+.DS_Store
+Thumbs.db
