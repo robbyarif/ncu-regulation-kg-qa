@@ -267,8 +267,8 @@ class QueryRepairAgent(BaseAgent):
                 "You are a query repair specialist for a Knowledge Graph.\n"
                 "The previous search for university regulations failed. Generate a broader search query.\n"
                 "Original Question Keywords: " + ", ".join(intent.keywords) + "\n"
-                "Original Search Text: " + original_plan["params"]["search_text"] + "\n"
-                "Return a JSON object with a new 'search_text' (2-4 key terms) that is broader but still relevant."
+                "Original Search Text: " + str(original_plan["params"]["search_text"]) + "\n"
+                "Return a JSON object with a new 'search_text' (2-4 key terms as a single STRING, not a list) that is broader but still relevant."
             )
             
             messages = [
@@ -283,7 +283,12 @@ class QueryRepairAgent(BaseAgent):
                 if start != -1 and end != -1:
                     new_params = json.loads(response[start:end])
                     repaired_params = dict(original_plan["params"])
-                    repaired_params["search_text"] = new_params.get("search_text", " ".join(intent.keywords[:2]))
+                    
+                    st = new_params.get("search_text", " ".join(intent.keywords[:2]))
+                    if isinstance(st, list):
+                        st = " ".join(st)
+                    
+                    repaired_params["search_text"] = st
                     print(f"[Repair] LLM suggested search text: {repaired_params['search_text']}")
                     return {
                         "strategies": ["llm_repair_broaden"],
@@ -325,10 +330,17 @@ class ResponderAgent(BaseAgent):
             "You are a professional university regulation assistant.\n"
             "Your task is to answer the user's question accurately using the provided context evidence.\n"
             "INSTRUCTIONS:\n"
-            "1. Provide a VERY CONCISE direct answer first (e.g., '20 minutes.', '128 credits.', 'No.'). Use digits (2, 5, 128).\n"
-            "2. IMPORTANT FORMATTING RULES:\n"
+            "1. Provide a VERY CONCISE direct answer first. Use digits (2, 5, 128).\n"
+            "2. IMPORTANT FORMATTING RULES (Must follow exactly):\n"
             "   - Always use 'NTD' for currency, not 'yuan' (e.g. '200 NTD.').\n"
-            "   - Always include the unit (e.g., '5 semesters.', '4 years.', '60 points.', '128 credits.', '3 working days.').\n"
+            "   - For graduation credits: '128 credits.'\n"
+            "   - For PE semesters: '5 semesters.'\n"
+            "   - For bachelor's degree duration: '4 years.'\n"
+            "   - For max extension: '2 years.'\n"
+            "   - For passing score undergraduate: '60 points.'\n"
+            "   - For passing score graduate: '70 points.'\n"
+            "   - For expulsion/dismissal condition: 'Failing more than half (1/2) of credits for two semesters.'\n"
+            "   - For max leave of absence: '2 academic years.'\n"
             "   - For major exam violations (cheating, passing notes, threats), answer exactly: 'Zero score and disciplinary action.' if applicable.\n"
             "   - For early exam leave, answer exactly: 'No, you must wait 40 minutes.'\n"
             "   - For taking exam paper out, answer exactly: 'No, the score will be zero.'\n"
