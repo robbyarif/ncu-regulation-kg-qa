@@ -193,7 +193,7 @@ def build_graph() -> None:
         session.run(
             """
             CREATE FULLTEXT INDEX rule_idx IF NOT EXISTS
-            FOR (r:Rule) ON EACH [r.action, r.result]
+            FOR (r:Rule) ON EACH [r.action, r.result, r.subject, r.type]
             """
         )
 

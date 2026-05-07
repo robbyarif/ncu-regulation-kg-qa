@@ -26,3 +26,8 @@ auto_test_a5_results.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Additional Ignores
+auto_test_a5_results_log.txt
+wandb/
+scratch/
