@@ -75,6 +75,23 @@ def answer_question(question: str) -> dict[str, Any]:
     # 7. Response Generation
     if diagnosis["label"] == "SUCCESS":
         answer = responder.run(question, execution["rows"])
+        
+        # --- NEW LLM-DRIVEN REPAIR TRIGGER ---
+        # If the responder couldn't find the answer, the retrieved data was irrelevant.
+        if "not mentioned" in answer.lower() and not repair_attempted:
+            print("[Orchestrator] Responder failed to find answer. Triggering repair...")
+            diagnosis["label"] = "NO_DATA"
+            repair_attempted = True
+            repaired_plan = repair_agent.run(diagnosis, plan, intent)
+            
+            if repaired_plan["params"]["search_text"] != plan["params"]["search_text"] or repaired_plan["strategies"] != plan["strategies"]:
+                repair_changed = True
+                execution = executor.run(repaired_plan)
+                diagnosis = diagnosis_agent.run(execution, intent)
+                if diagnosis["label"] == "SUCCESS":
+                    answer = responder.run(question, execution["rows"])
+                else:
+                    answer = "I'm sorry, I couldn't find any specific regulations related to your question even after broadening the search."
     elif diagnosis["label"] == "NO_DATA":
         answer = "I'm sorry, I couldn't find any specific regulations related to your question in the knowledge graph."
     else:

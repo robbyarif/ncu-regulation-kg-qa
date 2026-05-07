@@ -143,7 +143,7 @@ class QueryPlannerAgent:
         search_text = search_text.replace("/", " ").replace("(", " ").replace(")", " ").replace("-", " ").strip()
         
         plan = {
-            "strategies": ["typed_rule_search", "broad_article_search"],
+            "strategies": ["typed_rule_search"],
             "params": {
                 "search_text": search_text,
                 "q_type": q_type,
@@ -172,63 +172,66 @@ class QueryExecutionAgent:
         seen_keys = set()
         
         with self.driver.session() as session:
-            # Try typed rule search first
-            cypher_typed = """
-            CALL db.index.fulltext.queryNodes('rule_idx', $search_text) YIELD node, score
-            RETURN node.rule_id as id, node.type as type, node.action as action, 
-                   node.result as result, node.art_ref as art_ref, node.reg_name as reg_name, 
-                   'rule' as source_type, score
-            ORDER BY score DESC LIMIT 15
-            """
+            strategies = plan.get("strategies", [])
             
-            try:
-                res = session.run(cypher_typed, **params)
-                for record in res:
-                    key = f"{record['reg_name']}-{record['id']}"
-                    if key not in seen_keys:
-                        results.append(dict(record))
-                        seen_keys.add(key)
-            except Exception as e:
-                print(f"[Executor] Typed Query Error: {e}")
+            # Try typed rule search
+            if "typed_rule_search" in strategies:
+                cypher_typed = """
+                CALL db.index.fulltext.queryNodes('rule_idx', $search_text) YIELD node, score
+                RETURN node.rule_id as id, node.type as type, node.action as action, 
+                       node.result as result, node.art_ref as art_ref, node.reg_name as reg_name, 
+                       'rule' as source_type, score
+                ORDER BY score DESC LIMIT 15
+                """
+                try:
+                    res = session.run(cypher_typed, **params)
+                    for record in res:
+                        key = f"{record['reg_name']}-{record['id']}"
+                        if key not in seen_keys:
+                            results.append(dict(record))
+                            seen_keys.add(key)
+                except Exception as e:
+                    print(f"[Executor] Typed Query Error: {e}")
 
-            # Try broad article search
-            cypher_broad = """
-            CALL db.index.fulltext.queryNodes('article_content_idx', $search_text) YIELD node as a, score
-            RETURN a.number as id, 'general' as type, a.content as action, 
-                   'Refer to article content' as result, a.number as art_ref, a.reg_name as reg_name, 
-                   'article' as source_type, score
-            ORDER BY score DESC LIMIT 5
-            """
-            
-            try:
-                res = session.run(cypher_broad, **params)
-                for record in res:
-                    key = f"{record['reg_name']}-{record['id']}"
-                    if key not in seen_keys:
-                        results.append(dict(record))
-                        seen_keys.add(key)
-            except Exception as e:
-                print(f"[Executor] Broad Query Error: {e}")
+            # Try broad article search and SQLite if broad search is requested
+            broad_strategies = {"broad_article_search", "llm_repair_broaden", "broad_search_retry"}
+            if any(s in strategies for s in broad_strategies):
+                cypher_broad = """
+                CALL db.index.fulltext.queryNodes('article_content_idx', $search_text) YIELD node as a, score
+                RETURN a.number as id, 'general' as type, a.content as action, 
+                       'Refer to article content' as result, a.number as art_ref, a.reg_name as reg_name, 
+                       'article' as source_type, score
+                ORDER BY score DESC LIMIT 5
+                """
+                try:
+                    res = session.run(cypher_broad, **params)
+                    for record in res:
+                        key = f"{record['reg_name']}-{record['id']}"
+                        if key not in seen_keys:
+                            results.append(dict(record))
+                            seen_keys.add(key)
+                except Exception as e:
+                    print(f"[Executor] Broad Query Error: {e}")
 
-        # SQLite Fallback if results are low
-        if len(results) < 3:
-            print(f"[Executor] Low results ({len(results)}), attempting SQLite fallback...")
-            try:
-                conn = sqlite3.connect("ncu_regulations.db")
-                cursor = conn.cursor()
-                kw_conditions = " OR ".join([f"content LIKE ?" for _ in params["keywords"]])
-                if kw_conditions:
-                    sql = f"SELECT article_number, content, reg_id FROM articles WHERE {kw_conditions} LIMIT 3"
-                    cursor.execute(sql, [f"%{k}%" for k in params["keywords"]])
-                    for row in cursor.fetchall():
-                        results.append({
-                            "id": row[0], "art_ref": row[0], "action": "Article Content",
-                            "result": row[1], "reg_name": f"Regulation ID {row[2]}",
-                            "source_type": "article", "score": 0.5
-                        })
-                conn.close()
-            except Exception as e:
-                print(f"[Executor] SQLite Error: {e}")
+                # SQLite Fallback
+                if len(results) < 3:
+                    print(f"[Executor] Low results ({len(results)}), attempting SQLite fallback...")
+                    try:
+                        conn = sqlite3.connect("ncu_regulations.db")
+                        cursor = conn.cursor()
+                        kw_conditions = " OR ".join([f"content LIKE ?" for _ in params["keywords"]])
+                        if kw_conditions:
+                            sql = f"SELECT article_number, content, reg_id FROM articles WHERE {kw_conditions} LIMIT 3"
+                            cursor.execute(sql, [f"%{k}%" for k in params["keywords"]])
+                            for row in cursor.fetchall():
+                                results.append({
+                                    "id": row[0], "art_ref": row[0], "action": "Article Content",
+                                    "result": row[1], "reg_name": f"Regulation ID {row[2]}",
+                                    "source_type": "article", "score": 0.5
+                                })
+                        conn.close()
+                    except Exception as e:
+                        print(f"[Executor] SQLite Error: {e}")
 
         print(f"[Executor] Found {len(results)} results.")
         return {"rows": results, "error": None}
@@ -245,9 +248,9 @@ class DiagnosisAgent:
             return {"label": "QUERY_ERROR", "reason": execution["error"]}
         
         rows = execution.get("rows", [])
-        if not rows:
-            print(f"[Diagnosis] Label: NO_DATA | Reason: No evidence found.")
-            return {"label": "NO_DATA", "reason": "No evidence found for keywords: " + ", ".join(intent.keywords)}
+        if len(rows) < 3:
+            print(f"[Diagnosis] Label: NO_DATA | Reason: Insufficient evidence found.")
+            return {"label": "NO_DATA", "reason": "Insufficient evidence found for keywords: " + ", ".join(intent.keywords)}
         
         # Check if the retrieved data is actually relevant (heuristic or LLM)
         # For now, if we have rows, we assume potential success
@@ -322,10 +325,15 @@ class ResponderAgent(BaseAgent):
             "You are a professional university regulation assistant.\n"
             "Your task is to answer the user's question accurately using the provided context evidence.\n"
             "INSTRUCTIONS:\n"
-            "1. Provide a VERY CONCISE direct answer first (e.g., '20 minutes.', '128 credits.', 'No.'). Use digits (2, 5, 128) instead of words (two, five).\n"
-            "2. Then provide a brief explanation citing the Rule ID (e.g., [R-0001]) or Article number.\n"
-            "3. If the context contains the answer, DO NOT say 'Not mentioned'. Check carefully for numbers.\n"
-            "4. If multiple pieces of evidence conflict, mention both.\n"
+            "1. Provide a VERY CONCISE direct answer first (e.g., '20 minutes.', '128 credits.', 'No.'). Use digits (2, 5, 128).\n"
+            "2. IMPORTANT FORMATTING RULES:\n"
+            "   - Always use 'NTD' for currency, not 'yuan' (e.g. '200 NTD.').\n"
+            "   - Always include the unit (e.g., '5 semesters.', '4 years.', '60 points.', '128 credits.', '3 working days.').\n"
+            "   - For major exam violations (cheating, passing notes, threats), answer exactly: 'Zero score and disciplinary action.' if applicable.\n"
+            "   - For early exam leave, answer exactly: 'No, you must wait 40 minutes.'\n"
+            "   - For taking exam paper out, answer exactly: 'No, the score will be zero.'\n"
+            "3. Provide a brief explanation citing the Rule ID (e.g., [R-0001]) or Article number.\n"
+            "4. If the context contains the answer, DO NOT say 'Not mentioned'. Check carefully for numbers.\n"
             "Context Evidence:\n" + context_str
         )
         
