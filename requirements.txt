@@ -17,3 +17,6 @@ sentencepiece           # tokeniser for some models (e.g. LLaMA, Phi)
 
 # Environment Variables Management
 python-dotenv
+
+# Experiment Tracking
+wandb
